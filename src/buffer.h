@@ -20,10 +20,12 @@ int buffer_init(SharedBuffer *buf,
 /* Free memory and destroy semaphores and mutex. */
 void buffer_destroy(SharedBuffer *buf);
 
-/* Insert one item into the circular buffer (blocks if full). */
+/* Insert one item into the priority queues (blocks if full). */
 void buffer_put(SharedBuffer *buf, Item item);
 
-/* Remove one item from the buffer (blocks if empty). */
+/* Remove one item, always preferring urgent items first.
+   Within each priority we keep FIFO order. Blocks if empty. */
 Item buffer_get(SharedBuffer *buf);
 
 #endif /* BUFFER_H */
+
