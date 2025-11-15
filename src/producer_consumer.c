@@ -88,13 +88,13 @@ int run_simulation(int producer_count,
         pthread_join(producers[i], NULL);
     }
 
-    /* Insert one poison pill per consumer after producers have stopped.
-       Because the buffer is FIFO and no more real items are added,
-       all real items are consumed before these pills. */
+    /* Insert one poison pill per consumer after producers have stopped. */
     for (int i = 0; i < consumer_count; i++) {
         Item pill;
         pill.value = POISON_PILL_VALUE;
         pill.is_poison = 1;
+        pill.priority = 0;   /* treated as normal */
+
         buffer_put(&shared, pill);
     }
 
@@ -106,6 +106,29 @@ int run_simulation(int producer_count,
     printf("\nSummary:\n");
     printf("  Total real items expected: %d\n", shared.real_items_target);
     printf("  Total real items consumed: %d\n", shared.real_items_seen);
+
+    if (shared.latency_samples > 0 && shared.has_first_enqueue) {
+        double avg_latency_ms =
+            (double)shared.total_latency_ns /
+            (double)shared.latency_samples / 1e6;
+
+        long long total_time_ns =
+            (shared.last_dequeue.tv_sec - shared.first_enqueue.tv_sec) * 1000000000LL +
+            (shared.last_dequeue.tv_nsec - shared.first_enqueue.tv_nsec);
+
+        double total_time_sec = 0.0;
+        if (total_time_ns > 0) {
+            total_time_sec = (double)total_time_ns / 1e9;
+        }
+
+        double throughput = 0.0;
+        if (total_time_sec > 0.0) {
+            throughput = (double)shared.latency_samples / total_time_sec;
+        }
+
+        printf("  Average latency: %.3f ms\n", avg_latency_ms);
+        printf("  Throughput: %.3f items per second\n", throughput);
+    }
 
     free(producers);
     free(consumers);
@@ -119,3 +142,4 @@ int run_simulation(int producer_count,
 
     return EXIT_SUCCESS;
 }
+
