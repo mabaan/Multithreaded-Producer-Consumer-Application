@@ -2,9 +2,10 @@
  * File: consumer.c
  * Description:
  *   Defines the logic executed by each consumer thread.
- *   Continuously removes data from the shared buffer and processes it (e.g., prints to console).
- *   Blocks if the buffer is empty.
- *   Terminates gracefully upon receiving the special POISON_PILL value.
+ *   Continuously removes data from the shared buffer and processes it.
+ *   Always consumes urgent items before normal items, while keeping FIFO order
+ *   within each priority queue. Blocks if the buffer is empty and terminates
+ *   gracefully upon receiving the special POISON_PILL value.
  */
 
 #include "buffer.h"
@@ -23,7 +24,10 @@ void *consumer_thread(void *arg)
             break;
         }
 
-        printf("[Consumer-%d] Consumed item: %d\n", id, item.value);
+        printf("[Consumer-%d] Consumed item: %d (priority %d)\n",
+               id,
+               item.value,
+               item.priority);
     }
 
     free(info);
