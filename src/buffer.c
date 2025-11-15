@@ -18,29 +18,45 @@ int buffer_init(SharedBuffer *buf,
         return -1;
     }
 
-    buf->slots = malloc(sizeof(Item) * capacity);
-    if (buf->slots == NULL) {
+    buf->urgent_slots = malloc(sizeof(Item) * capacity);
+    buf->normal_slots = malloc(sizeof(Item) * capacity);
+
+    if (buf->urgent_slots == NULL || buf->normal_slots == NULL) {
         perror("malloc");
+        free(buf->urgent_slots);
+        free(buf->normal_slots);
         return -1;
     }
 
     buf->capacity = capacity;
-    buf->head = 0;
-    buf->tail = 0;
+
+    buf->urgent_head = 0;
+    buf->urgent_tail = 0;
+    buf->urgent_count = 0;
+
+    buf->normal_head = 0;
+    buf->normal_tail = 0;
+    buf->normal_count = 0;
 
     buf->real_items_target = total_real_items;
     buf->real_items_seen = 0;
 
+    buf->total_latency_ns = 0;
+    buf->latency_samples = 0;
+    buf->has_first_enqueue = 0;
+
     if (sem_init(&buf->slots_free, 0, capacity) != 0) {
         perror("sem_init slots_free");
-        free(buf->slots);
+        free(buf->urgent_slots);
+        free(buf->normal_slots);
         return -1;
     }
 
     if (sem_init(&buf->slots_used, 0, 0) != 0) {
         perror("sem_init slots_used");
         sem_destroy(&buf->slots_free);
-        free(buf->slots);
+        free(buf->urgent_slots);
+        free(buf->normal_slots);
         return -1;
     }
 
@@ -48,7 +64,8 @@ int buffer_init(SharedBuffer *buf,
         perror("pthread_mutex_init");
         sem_destroy(&buf->slots_free);
         sem_destroy(&buf->slots_used);
-        free(buf->slots);
+        free(buf->urgent_slots);
+        free(buf->normal_slots);
         return -1;
     }
 
@@ -64,51 +81,84 @@ void buffer_destroy(SharedBuffer *buf)
     pthread_mutex_destroy(&buf->lock);
     sem_destroy(&buf->slots_free);
     sem_destroy(&buf->slots_used);
-    free(buf->slots);
 
-    buf->slots = NULL;
-    buf->capacity = 0;
+    free(buf->urgent_slots);
+    free(buf->normal_slots);
+
+    buf->urgent_slots = NULL;
+    buf->normal_slots = NULL;
 }
 
-/* Circular enqueue */
 void buffer_put(SharedBuffer *buf, Item item)
 {
-    /* Block until there is at least one free slot */
     sem_wait(&buf->slots_free);
 
     pthread_mutex_lock(&buf->lock);
 
-    buf->slots[buf->head] = item;
-    buf->head = (buf->head + 1) % buf->capacity;
+    if (!item.is_poison) {
+        clock_gettime(CLOCK_MONOTONIC, &item.enqueue_time);
 
-    pthread_mutex_unlock(&buf->lock);
+        if (!buf->has_first_enqueue) {
+            buf->first_enqueue = item.enqueue_time;
+            buf->has_first_enqueue = 1;
+        }
+    }
 
-    /* Signal that a new item is available */
-    sem_post(&buf->slots_used);
-}
-
-/* Circular dequeue */
-Item buffer_get(SharedBuffer *buf)
-{
-    Item result;
-
-    /* Block until there is at least one item */
-    sem_wait(&buf->slots_used);
-
-    pthread_mutex_lock(&buf->lock);
-
-    result = buf->slots[buf->tail];
-    buf->tail = (buf->tail + 1) % buf->capacity;
-
-    /* Count only real items, not poison pills */
-    if (!result.is_poison) {
-        buf->real_items_seen++;
+    if (!item.is_poison && item.priority == 1) {
+        buf->urgent_slots[buf->urgent_head] = item;
+        buf->urgent_head = (buf->urgent_head + 1) % buf->capacity;
+        buf->urgent_count++;
+    } else {
+        buf->normal_slots[buf->normal_head] = item;
+        buf->normal_head = (buf->normal_head + 1) % buf->capacity;
+        buf->normal_count++;
     }
 
     pthread_mutex_unlock(&buf->lock);
 
-    /* Signal that one more free slot exists */
+    sem_post(&buf->slots_used);
+}
+
+Item buffer_get(SharedBuffer *buf)
+{
+    Item result;
+
+    sem_wait(&buf->slots_used);
+
+    pthread_mutex_lock(&buf->lock);
+
+    if (buf->urgent_count > 0) {
+        result = buf->urgent_slots[buf->urgent_tail];
+        buf->urgent_tail = (buf->urgent_tail + 1) % buf->capacity;
+        buf->urgent_count--;
+    } else {
+        result = buf->normal_slots[buf->normal_tail];
+        buf->normal_tail = (buf->normal_tail + 1) % buf->capacity;
+        buf->normal_count--;
+    }
+
+    if (!result.is_poison) {
+        buf->real_items_seen++;
+
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+
+        long long diff_ns =
+            (now.tv_sec - result.enqueue_time.tv_sec) * 1000000000LL +
+            (now.tv_nsec - result.enqueue_time.tv_nsec);
+
+        if (diff_ns < 0) diff_ns = 0;
+
+        buf->total_latency_ns += diff_ns;
+        buf->latency_samples++;
+        buf->last_dequeue = now;
+    }
+
+    pthread_mutex_unlock(&buf->lock);
+
     sem_post(&buf->slots_free);
 
     return result;
 }
+
+
