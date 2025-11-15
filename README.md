@@ -1,5 +1,4 @@
-# CMP 310 Mini Project  
-Multithreaded Producer Consumer Application
+# Multithreaded Producer Consumer Application
 
 ## 1. Project overview
 
