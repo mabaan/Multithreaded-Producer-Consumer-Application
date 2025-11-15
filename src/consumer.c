@@ -6,3 +6,26 @@
  *   Blocks if the buffer is empty.
  *   Terminates gracefully upon receiving the special POISON_PILL value.
  */
+
+#include "buffer.h"
+
+void *consumer_thread(void *arg)
+{
+    ThreadArgs *info = (ThreadArgs *)arg;
+    SharedBuffer *buf = info->buffer;
+    int id = info->id;
+
+    while (1) {
+        Item item = buffer_get(buf);
+
+        if (item.is_poison) {
+            printf("[Consumer-%d] Received poison pill. Exiting.\n", id);
+            break;
+        }
+
+        printf("[Consumer-%d] Consumed item: %d\n", id, item.value);
+    }
+
+    free(info);
+    return NULL;
+}
